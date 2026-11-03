@@ -1,0 +1,27 @@
+name: Solar plug
+
+on:
+  schedule:
+    - cron: "*/10 4-10 * * *"
+    - cron: "0 11 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests tinytuya
+      - run: python luxplug.py
+        env:
+          LUX_USER: ${{ secrets.LUX_USER }}
+          LUX_PASS: ${{ secrets.LUX_PASS }}
+          LUX_SERIAL: ${{ secrets.LUX_SERIAL }}
+          TUYA_KEY: ${{ secrets.TUYA_KEY }}
+          TUYA_SECRET: ${{ secrets.TUYA_SECRET }}
+          TUYA_REGION: ${{ secrets.TUYA_REGION }}
+          TUYA_DEVICE_ID: ${{ secrets.TUYA_DEVICE_ID }}
