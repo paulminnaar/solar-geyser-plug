@@ -2,8 +2,7 @@ name: Solar plug
 
 on:
   schedule:
-    - cron: "*/10 4-11 * * *"
-    - cron: "0 12 * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch: {}
 
 jobs:
@@ -25,6 +24,5 @@ jobs:
           TUYA_SECRET: ${{ secrets.TUYA_SECRET }}
           TUYA_REGION: ${{ secrets.TUYA_REGION }}
           TUYA_DEVICE_ID: ${{ secrets.TUYA_DEVICE_ID }}
-          ON_SOC: ${{ secrets.ON_SOC }}
-          LOW_SOC: ${{ secrets.LOW_SOC }}
-          CUTOFF_TIME: ${{ secrets.CUTOFF_TIME }}
+          MIN_SOC: ${{ secrets.MIN_SOC }}
+          OVERNIGHT_PCT: ${{ secrets.OVERNIGHT_PCT }}
