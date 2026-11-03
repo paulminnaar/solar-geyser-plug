@@ -25,3 +25,6 @@ jobs:
           TUYA_SECRET: ${{ secrets.TUYA_SECRET }}
           TUYA_REGION: ${{ secrets.TUYA_REGION }}
           TUYA_DEVICE_ID: ${{ secrets.TUYA_DEVICE_ID }}
+          ON_SOC: ${{ secrets.ON_SOC }}
+          LOW_SOC: ${{ secrets.LOW_SOC }}
+          CUTOFF_TIME: ${{ secrets.CUTOFF_TIME }}
