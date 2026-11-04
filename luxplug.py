@@ -10,6 +10,8 @@ only draws power when the water needs heating.
 
 Rules (battery % thresholds; between "on" and "off" the plug stays as it is):
   Any time            battery >= ALWAYS_ON (95)                 -> ON
+  Any time            spare solar >= geyser (2 kW) and battery >= PV_MIN_SOC (70) -> ON
+                      (stays on while the panels keep covering it)
   Day   06:00-15:00   ON at 90,  OFF below 75   (+5 if today is cloudy)
   Evening 15:00-20:00 OFF below MIN_SOC + OVERNIGHT_PCT (+5 normal / +10 cloudy tomorrow)
                       ON 10 above that
@@ -19,6 +21,8 @@ Required settings (GitHub secrets):
   LUX_USER, LUX_PASS, LUX_SERIAL, TUYA_KEY, TUYA_SECRET, TUYA_REGION, TUYA_DEVICE_ID
 Optional:
   MIN_SOC        lowest battery % you accept by sunrise          (default 40)
+  PV_MIN_SOC     lowest battery % for running on spare solar     (default 70)
+  GEYSER_W       geyser element power in watts                   (default 2000)
   OVERNIGHT_PCT  battery % the house uses from 20:00 to 06:00    (default 30)
   LAT, LON       location for the weather forecast               (default Roodepoort)
   LUX_BASE_URL   LuxPower server (auto-detected if not set)
@@ -54,6 +58,9 @@ SWITCH_CODE = env("SWITCH_CODE")
 
 MIN_SOC = int(env("MIN_SOC", "40"))
 OVERNIGHT_PCT = int(env("OVERNIGHT_PCT", "30"))
+PV_MIN_SOC = int(env("PV_MIN_SOC", "70"))
+GEYSER_W = int(env("GEYSER_W", "2000"))
+PV_TOLERANCE_W = 300  # battery may supply this much while "solar covers it"
 ALWAYS_ON = 95
 LAT = float(env("LAT", "-26.16"))
 LON = float(env("LON", "27.87"))
@@ -102,7 +109,8 @@ def lux_login():
              + "\n  ".join(problems))
 
 
-def get_battery_soc():
+def get_battery():
+    """Returns (soc %, pv watts, battery net watts: + charging / - discharging)."""
     s, base = lux_login()
     r = s.post(f"{base}/WManage/api/inverter/getInverterRuntime",
                data={"serialNum": LUX_SERIAL}, timeout=30)
@@ -112,7 +120,12 @@ def get_battery_soc():
         sys.exit(f"LuxPower gave no data (HTTP {r.status_code}) - check LUX_SERIAL")
     if not data.get("success", True) or "soc" not in data:
         sys.exit(f"LuxPower returned no battery data - check LUX_SERIAL. Reply: {data}")
-    return int(data["soc"])
+    pv = data.get("ppv")
+    if pv is None:
+        pv = sum(int(data.get(k) or 0) for k in ("ppv1", "ppv2", "ppv3", "ppv4"))
+    charge, discharge = data.get("pCharge"), data.get("pDisCharge")
+    net = None if charge is None and discharge is None else int(charge or 0) - int(discharge or 0)
+    return int(data["soc"]), int(pv or 0), net
 
 
 # ---------- Weather (Open-Meteo) ----------
@@ -178,23 +191,38 @@ def thresholds(hour, outlook):
     return "night", ALWAYS_ON, 90
 
 
+def solar_covers(is_on, net):
+    """Is there enough spare solar to run the geyser without the battery?
+    Off: the power going into the battery is spare, needs >= GEYSER_W.
+    On:  the geyser is already included, the battery must not be feeding it."""
+    if net is None:
+        return False
+    return net >= -PV_TOLERANCE_W if is_on else net >= GEYSER_W
+
+
 def main():
     now = datetime.now(TZ)
     code, is_on, watts = get_plug()
-    soc = get_battery_soc()
+    soc, pv, net = get_battery()
     outlook = get_solar_outlook()
     period, on_at, off_below = thresholds(now.hour, outlook)
+    covers = solar_covers(is_on, net)
 
-    if soc >= ALWAYS_ON or soc >= on_at:
-        want = True
+    if soc >= ALWAYS_ON:
+        want, why = True, "battery full"
+    elif covers and soc >= PV_MIN_SOC:
+        want, why = True, "spare solar covers geyser"
     elif soc < off_below:
-        want = False
+        want, why = False, "below minimum"
+    elif soc >= on_at:
+        want, why = True, "above on-level"
     else:
-        want = is_on
+        want, why = is_on, "no change"
 
     draw = f", geyser drawing {watts:.0f} W" if (watts is not None and is_on) else ""
-    info = (f"battery {soc}%, {period}: on at {on_at}%, off below {off_below}%"
-            f" [solar {outlook['mj']}]{draw}")
+    flow = "n/a" if net is None else (f"+{net} W charging" if net >= 0 else f"{-net} W discharging")
+    info = (f"{why}; battery {soc}% ({flow}), PV {pv} W, {period}: on at {on_at}%, "
+            f"off below {off_below}% [forecast {outlook['mj']}]{draw}")
 
     if want != is_on:
         set_plug(code, want)
