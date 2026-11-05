@@ -31,6 +31,7 @@ Optional:
 
 import os
 import sys
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -109,8 +110,21 @@ def lux_login():
              + "\n  ".join(problems))
 
 
+def get_battery_with_retry(tries=3, wait_s=60):
+    """Short Wi-Fi dips are common: if the inverter shows offline, wait and retry."""
+    for attempt in range(tries):
+        result = get_battery()
+        if result[0] is not None:
+            return result
+        if attempt < tries - 1:
+            print(f"Inverter shows offline - retrying in {wait_s} s ({attempt + 1}/{tries - 1})")
+            time.sleep(wait_s)
+    return result
+
+
 def get_battery():
-    """Returns (soc %, pv watts, battery net watts: + charging / - discharging)."""
+    """Returns (soc %, pv watts, battery net watts: + charging / - discharging).
+    soc is None when LuxPower reports the inverter offline."""
     s, base = lux_login()
     r = s.post(f"{base}/WManage/api/inverter/getInverterRuntime",
                data={"serialNum": LUX_SERIAL}, timeout=30)
@@ -118,8 +132,10 @@ def get_battery():
         data = r.json()
     except ValueError:
         sys.exit(f"LuxPower gave no data (HTTP {r.status_code}) - check LUX_SERIAL")
-    if not data.get("success", True) or "soc" not in data:
-        sys.exit(f"LuxPower returned no battery data - check LUX_SERIAL. Reply: {data}")
+    if not data.get("success", True):
+        sys.exit(f"LuxPower returned an error - check LUX_SERIAL. Reply: {data}")
+    if data.get("lost") or "soc" not in data:
+        return None, 0, None  # inverter/dongle offline - no live battery reading
     pv = data.get("ppv")
     if pv is None:
         pv = sum(int(data.get(k) or 0) for k in ("ppv1", "ppv2", "ppv3", "ppv4"))
@@ -203,7 +219,16 @@ def solar_covers(is_on, net):
 def main():
     now = datetime.now(TZ)
     code, is_on, watts = get_plug()
-    soc, pv, net = get_battery()
+    soc, pv, net = get_battery_with_retry()
+    if soc is None:
+        # Can't see the battery: protect it (off-grid) by keeping the geyser off.
+        if is_on:
+            set_plug(code, False)
+        print(f"{now:%Y-%m-%d %H:%M} WARNING: LuxPower shows the inverter OFFLINE "
+              f"(Wi-Fi dongle not reporting) - battery unknown, geyser "
+              f"{'switched OFF' if is_on else 'kept OFF'} for safety. "
+              f"Check the dongle / Wi-Fi.")
+        return
     outlook = get_solar_outlook()
     period, on_at, off_below = thresholds(now.hour, outlook)
     covers = solar_covers(is_on, net)
